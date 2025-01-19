@@ -1,0 +1,126 @@
+#include <HX711_ADC.h>
+#if defined(ESP8266) || defined(ESP32) || defined(AVR)
+#include <EEPROM.h>
+#endif
+#include <Wire.h>
+#include <Stepper.h>
+#include<U8g2lib.h>
+// Use smaller variables where possible
+const long stepsPerRevolution = 2048; // check before execution
+long red_wt = 0;
+long blue_wt = 0;
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);// OLED
+Initialization
+// Stepper initialization
+Stepper myStepper(stepsPerRevolution, 8, 10, 9, 11);
+// HX711 Pins
+const uint8_t HX711_dout = 4;
+const uint8_t HX711_sck = 5;
+// HX711 Constructor
+HX711_ADC LoadCell(HX711_dout, HX711_sck);
+const uint16_t calVal_eepromAdress = 0;
+unsigned long t = 0;
+void setup() {
+// Pin Initialization
+pinMode(6, OUTPUT);
+pinMode(7, OUTPUT);
+pinMode(2, OUTPUT);
+pinMode(3, OUTPUT);
+pinMode(10, OUTPUT);
+pinMode(0, OUTPUT);
+pinMode(1, OUTPUT);
+pinMode(9, OUTPUT);
+myStepper.setSpeed(10);
+Serial.begin(57600);
+delay(10);
+// Oled Initialization
+u8g2.begin();
+u8g2.setFont(u8g2_font_helvB08_tr);
+u8g2.clearBuffer();
+u8g2.drawStr(10,10,"Startup Complete");
+u8g2.sendBuffer();
+
+Serial.println("Starting...");
+peristal_pump(9, 0);
+valve(6, 1);
+valve(7, 1);
+LoadCell.begin();
+LoadCell.setReverseOutput(); // To reverse output, if needed
+float calibrationValue;
+EEPROM.get(calVal_eepromAdress, calibrationValue);
+unsigned long stabilizingtime = 2000;
+LoadCell.start(stabilizingtime, true);
+if (LoadCell.getTareTimeoutFlag())
+{
+Serial.println("Timeout, check wiring");
+while (1);
+}
+else
+{
+LoadCell.setCalFactor(calibrationValue);
+Serial.println("Startup complete");
+}
+}
+void loop() {
+// Perform 3 cycles
+for (int n = 0; n < 3; n++) {
+valve(6, 1);
+delay(2000);
+dispense(red_wt, 5, "Red");
+valve(6, 0);
+delay(3000);
+rotateStepperToAngle(10);
+valve(7, 1);
+delay(2000);
+dispense(blue_wt, 10, "Blue");
+valve(7, 0);
+delay(3000);
+rotateStepperToAngle(-10);
+}
+}
+void rotateStepperToAngle(float angle) {
+float stepsPerDegree = (stepsPerRevolution / 360.0);
+long steps = (long)(angle * stepsPerDegree);
+myStepper.step(steps);
+}
+
+void dispense(long& current_wt, long to_be_dispensed, const char* name) {
+long target_wt = current_wt + to_be_dispensed;
+while (current_wt < target_wt) {
+float load_cell_data = LoadCell.getData();
+current_wt += ((load_cell_data) - blue_wt - red_wt);
+Serial.print("Weight of ");
+Serial.print(name);
+Serial.print(" liquid = ");
+Serial.println(current_wt);
+// Display the weight on the OLED
+char buffer[20];
+snprintf(buffer, sizeof(buffer), "Weight(g) of %c: %d",name, long(current_wt));
+u8g2.clearBuffer();
+u8g2.drawStr(10, 50, buffer);
+u8g2.sendBuffer();
+peristal_pump(3, 1);
+delay(2000);
+}
+peristal_pump(3, -1);
+delay(5000);
+peristal_pump(3, 0);
+delay(1000);
+}
+void peristal_pump(long peristal_speed, signed long direction) {
+if (direction == 1) {
+analogWrite(peristal_speed, 50);
+digitalWrite(0, HIGH);
+digitalWrite(1, LOW);
+} else if (direction == 0) {
+digitalWrite(0, LOW);
+digitalWrite(1, LOW);
+} else if (direction == -1) {
+analogWrite(peristal_speed, 100);
+digitalWrite(0, LOW);
+digitalWrite(1, HIGH);
+}
+}
+void valve(long valve_pin, long cont) {
+digitalWrite(valve_pin, cont ? HIGH : LOW);
+}
